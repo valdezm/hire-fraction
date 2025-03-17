@@ -3,12 +3,12 @@ import { desc, sql } from "drizzle-orm";
 import { z } from "zod";
 import { j, publicProcedure } from "../jstack";
 import { Player } from "@/lib/data";
- // Make API call to Llama 3.3 API
- async function run(model: string, input: any) {
+// Make API call to Llama 3.3 API
+async function run(model: string, input: any) {
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/4caa082265ef55ca9cd3f450d5f6450b/ai/run/${model}`,
     {
-      headers: { Authorization: "Bearer BkOa4gy2y3k-LK6jb6NbIZl0bBSxaEVHvb3ye3fi" },
+      headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_KEY}` },
       method: "POST",
       body: JSON.stringify(input),
     }
@@ -51,11 +51,9 @@ OPS: ${player.onBasePlusSlugging.toFixed(3)}
 Focus on their notable strengths or weaknesses as a player based on these statistics. The summary should be insightful but concise (approximately 100 words).
 `;
 
+    console.log(prompt_story);
 
-console.log(prompt_story)
-
-
-    const response = await run("@cf/meta/llama-3-8b-instruct", {
+    const response = (await run("@cf/meta/llama-3-8b-instruct", {
       messages: [
         {
           role: "system",
@@ -63,11 +61,10 @@ console.log(prompt_story)
         },
         {
           role: "user",
-          content:
-            prompt_story,
+          content: prompt_story,
         },
       ],
-    }) as ApiResponse
+    })) as ApiResponse;
     // const response = await fetch("https://api.hirefraction.com/api/llama/generate", {
     //   method: "POST",
     //   headers: {
@@ -84,7 +81,7 @@ console.log(prompt_story)
     //   throw new Error(`API request failed with status ${response.status}`);
     // }
 
-    console.log(response)
+    console.log(response);
     /*
     {
   result: {
@@ -100,16 +97,17 @@ console.log(prompt_story)
     if (!response.success) {
       throw new Error("Failed to generate player summary");
     }
-    const data = response.result.response
-    return data
-
+    const data = response.result.response;
+    return data;
   } catch (error) {
     console.error("Error generating player summary:", error);
-    return `${player.playerName} is a ${player.position} who has played ${player.games} games in their career with a batting average of ${player.avg.toFixed(3)}, ${player.homeRun} home runs, and ${player.runBattedIn} RBIs.`;
+    return `${player.playerName} is a ${player.position} who has played ${
+      player.games
+    } games in their career with a batting average of ${player.avg.toFixed(
+      3
+    )}, ${player.homeRun} home runs, and ${player.runBattedIn} RBIs.`;
   }
 }
-
-
 
 export const playerRouter = j.router({
   recent: publicProcedure.query(async ({ c, ctx }) => {
@@ -126,25 +124,25 @@ export const playerRouter = j.router({
     return c.superjson(players);
   }),
 
-
   refresh: publicProcedure.mutation(async ({ c, ctx }) => {
     const { db } = ctx;
-    
+
     // Truncate the table to delete all records
     await db.execute(sql`TRUNCATE TABLE "baseBallPlayers" RESTART IDENTITY`);
-    
+
     // Fetch new data from the API
-    const response = await fetch("https://api.hirefraction.com/api/test/baseball");
+    const response = await fetch(
+      "https://api.hirefraction.com/api/test/baseball"
+    );
     if (!response.ok) {
       throw new Error("Failed to fetch baseball players data");
     }
-    
+
     const data: Player[] = await response.json();
-    
+
     // Insert new data
-    const insertPromises = data.map((player: any) => 
+    const insertPromises = data.map((player: any) =>
       db.insert(baseBallPlayers).values({
-        
         // playerName: player["Player name"],
         // position: player["position"],
         // games: player["Games"],
@@ -164,8 +162,6 @@ export const playerRouter = j.router({
         // sluggingPercentage: player["Slugging Percentage"],
         // onBasePlusSlugging: player["On-base Plus Slugging"],
 
-
-        
         playerName: player["Player name"],
         position: player["position"],
         games: safeConvertToNumber(player["Games"]),
@@ -184,12 +180,11 @@ export const playerRouter = j.router({
         onBasePercentage: player["On-base Percentage"],
         sluggingPercentage: player["Slugging Percentage"],
         onBasePlusSlugging: player["On-base Plus Slugging"],
-
       })
     );
-    
+
     await Promise.all(insertPromises);
-    
+
     // Return newly inserted data
     const playersData = await db.select().from(baseBallPlayers);
     const players: Player[] = playersData.map((player) => ({
@@ -204,20 +199,22 @@ export const playerRouter = j.router({
   }),
 
   generateSummary: publicProcedure
-    .input(z.object({
-      playerId: z.number()
-    }))
+    .input(
+      z.object({
+        playerId: z.number(),
+      })
+    )
     .query(async ({ input, ctx, c }) => {
       const { db } = ctx;
       const [playerData] = await db
         .select()
         .from(baseBallPlayers)
         .where(sql`id = ${input.playerId}`);
-      
+
       if (!playerData) {
         throw new Error("Player not found");
       }
-      
+
       const player: Player = {
         ...playerData,
         avg: parseFloat(playerData.avg),
@@ -225,33 +222,35 @@ export const playerRouter = j.router({
         sluggingPercentage: parseFloat(playerData.sluggingPercentage),
         onBasePlusSlugging: parseFloat(playerData.onBasePlusSlugging),
       };
-      
+
       const summary = await generatePlayerSummary(player);
       return c.superjson({ summary: summary });
     }),
 
   updateBaseBallPlayer: publicProcedure
-    .input(z.object({
-      id: z.number(),
-      playerName: z.string().min(2),
-      position: z.string().min(1),
-      games: z.number().int().positive(),
-      atBat: z.number().int().positive(),
-      runs: z.number().int().nonnegative(),
-      hits: z.number().int().nonnegative(),
-      double: z.number().int().nonnegative(),
-      thirdBaseman: z.number().int().nonnegative(),
-      homeRun: z.number().int().nonnegative(),
-      runBattedIn: z.number().int().nonnegative(),
-      walk: z.number().int().nonnegative(),
-      strikeouts: z.number().int().nonnegative(),
-      stolenBase: z.number().int().nonnegative(),
-      caughtStealing: z.number().int().nonnegative(),
-      avg: z.number().min(0).max(1),
-      onBasePercentage: z.number().min(0).max(1),
-      sluggingPercentage: z.number().min(0).max(5),
-      onBasePlusSlugging: z.number().min(0).max(5),
-    }))
+    .input(
+      z.object({
+        id: z.number(),
+        playerName: z.string().min(2),
+        position: z.string().min(1),
+        games: z.number().int().positive(),
+        atBat: z.number().int().positive(),
+        runs: z.number().int().nonnegative(),
+        hits: z.number().int().nonnegative(),
+        double: z.number().int().nonnegative(),
+        thirdBaseman: z.number().int().nonnegative(),
+        homeRun: z.number().int().nonnegative(),
+        runBattedIn: z.number().int().nonnegative(),
+        walk: z.number().int().nonnegative(),
+        strikeouts: z.number().int().nonnegative(),
+        stolenBase: z.number().int().nonnegative(),
+        caughtStealing: z.number().int().nonnegative(),
+        avg: z.number().min(0).max(1),
+        onBasePercentage: z.number().min(0).max(1),
+        sluggingPercentage: z.number().min(0).max(5),
+        onBasePlusSlugging: z.number().min(0).max(5),
+      })
+    )
     .mutation(async ({ input, ctx, c }) => {
       const { db } = ctx;
       await db
